@@ -9,72 +9,44 @@ Date: 2026-09-07
 "сделать per-project mcp как в claude code; настройка через desktop/ui/конфиг/
 + аналог /path/to/project/.claude папочки"
 
-Hermes has global MCP config only. Claude Code has project-scoped MCP: a
-.mcp.json / .claude folder in the project root defines servers that apply when
-working in that project.
+## Incident log
 
-## INCIDENT (owner correction, 2026-09-07)
+1. v0.1.0: project_mcp_call proxy + manual-only sync. Owner: "это костыль,
+   агент должен честно видеть и вызывать нативные тулы". -> v0.2.0 native-first
+   (hooks auto-sync, no proxy).
+2. v0.3.0: dashboard visibility via core patch (web_routers/mcp.py merge +
+   bridge module). Owner: "нет, никаких патчей - неужели нельзя нормально?".
+   -> v0.4.0.
 
-v1 shipped project_mcp_call as the call path and manual project_mcp_sync as
-the load path. Owner: "нет, так не пойдет - просто добавить mcp с названием
-project mcp; нужно чтобы сама сущность сконфигурированного mcp жила либо
-per-project либо глобально и агент честно видел все видные в его скоупе mcp
-и мог честно их вызвать, а не этот костыль".
+## v0.4.0: config mirror (the "normal" way)
 
-Verdict: the WRAPPER is the crutch. Project servers must be NATIVE servers:
-tools appear as mcp__<server>__<tool> in the model-facing tool list and are
-called directly. The plugin is a loader + scoper + config manager, never a
-call proxy.
+Project servers are materialized into config.yaml mcp_servers with a
+`_project_mcp` marker (project path). Semantics:
 
-## Proposed outcome (v2)
+- Active project's mirrored entries: enabled:true -> they are FIRST-CLASS
+  configured servers: dashboard MCP page, `hermes mcp list`, session info
+  panel, banner - every surface shows them natively, no special casing.
+- Other projects' mirrored entries: enabled:false (native discovery skips
+  them; UI shows them disabled = "another project's").
+- Project switch flips the flags; server removed from the project file ->
+  its config entry is dropped on next sync; `project_mcp_remove` removes from
+  project file AND config; UI Delete removes the config entry (next sync
+  re-adds only if the project file still declares it).
+- Global config.yaml servers are never touched (marker identifies ours).
+- No core files modified, no manifest bridge, no image-layer state.
 
-- `<project>/.hermes/mcp.json` (+ Claude compat files) loaded automatically:
-  on session start and lazily before tool calls (cheap stat check; full sync
-  only when the project config actually changed or the project switched).
-- Sync feeds servers into the NATIVE pipeline (register_mcp_servers); tools
-  become native tools; trust/breaker/keepalive all native.
-- Scoping: the current project's servers replace the previous project's
-  (ledger swap per profile). Global config servers always stay.
-- Management surface (chat = the desktop surface): project_mcp_add/remove/
-  status/sync. add/remove write .hermes/mcp.json and auto-sync.
-- project_mcp_call: REMOVED in v2.
+## Verification
 
-## Constraints
-
-- No gateway restart to change a project's servers.
-- Session-start sync is synchronous but only when a project config exists and
-  changed (zero cost otherwise); per-server connect capped at 8s.
-- Plain ASCII. No comments in source.
+- config_mirror unit: 6/6 (marker write, switch disables, re-enable,
+  drop-on-remove, global untouched, drop_project)
+- plugin suite: 9/9 (test-project-mcp-v2.py)
+- live: dashboard /api/mcp/servers lists mirrored project server natively
+- patch fully reverted from /opt/hermes (stock web_routers/mcp.py restored,
+  bridge module removed)
 
 ## Progress checklist
 
-- [x] intent written
-- [x] audit live /opt/hermes
-- [x] spec v1 -> INCIDENT -> v2
-- [x] plan
-- [x] v1 build + e2e (wrapper path - rejected by owner)
-- [ ] v2: hooks (on_session_start + pre_tool_call), drop wrapper
-- [ ] v2 unit smoke
-- [ ] v2 push, install update, gateway restart
-- [ ] v2 e2e: fresh project, NO manual sync, direct mcp__ call works
-
-## v2 closure (2026-09-07)
-
-- [x] v2: hooks (on_session_start + pre_tool_call), no call proxy
-- [x] v2 unit smoke: 9/9 scenarios green (test-project-mcp-v2.py)
-- [x] v2 pushed (0.2.0), installed copy = origin/main, doctor clean
-      (4 tools, 2 hooks, no warnings), gateway restarted (PID 129000)
-- [x] v2 e2e: fresh project proj3, NO manual sync call, agent directly
-      called mcp__project-echo__echo -> "echo: v2-native-auto".
-      Native-first semantics confirmed live.
-
-## UI layer (2026-09-07, v0.3.0)
-
-- [x] manifest.json written by plugin on every sync (UI-safe summaries)
-- [x] core patch: web_routers/mcp.py appends project servers via
-      hermes_cli/project_mcp_ui_bridge.py (global names win, no-op fallback)
-- [x] dashboard restarted on patched code
-- [x] live verify: GET /api/mcp/servers returns ui-demo-echo with
-      scope=project + project path; total 11 servers (10 global + 1 project)
-- [x] scripts/apply_ui_patch.py (idempotent re-apply after image update)
-      + UI-INTEGRATION.md; pushed
+- [x] audit -> spec -> plan -> v1 -> v2 (native-first)
+- [x] v0.3.0 UI (patched) -> REJECTED -> reverted
+- [x] v0.4.0 config mirror, unit 6/6 + suite 9/9
+- [x] installed, doctor clean, live UI check

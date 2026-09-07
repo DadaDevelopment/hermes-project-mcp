@@ -36,6 +36,11 @@ project-local MCP setup, or asks what MCP servers a project has.
   Never paste server configs from untrusted repos without saying so.
 - A project server whose name equals a global server is skipped (global
   wins) and noted by project_mcp_status.
+- Synced project servers are mirrored into config.yaml (marked with
+  `_project_mcp`) so the dashboard/CLI show them as first-class servers.
+  The active project's servers are enabled; other projects' show as
+  disabled. Do not hand-edit mirrored entries - manage them via the
+  project file or project_mcp_add/remove.
 
 ## File format example
 
