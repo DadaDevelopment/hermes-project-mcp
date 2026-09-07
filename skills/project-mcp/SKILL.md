@@ -25,6 +25,10 @@ project-local MCP setup, or asks what MCP servers a project has.
   user asking for it.
 - If sync reports `confirmation_required`, tell the user what changed before
   calling project servers.
+- Native default for servers without a `trust` key is FULL (compat). The plugin
+deliberately does not inject `untrusted` automatically, to stay 1:1 with the
+native loader; when the user wants the safe default, add `"trust": "untrusted"`
+to the server entry (write-capable tools then require per-call approval).
 - Servers from the project directory run LOCAL COMMANDS from that directory.
   Never paste server configs from untrusted repos without saying so.
 

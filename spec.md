@@ -82,8 +82,13 @@ resolved against the project root. This lets a repo ship e.g.
 
 ## Trust model (Claude Code parity)
 
-- Native trust gate does the heavy lifting: project servers default to
-  `trust: untrusted`; write-capable tools prompt the user at call time.
+- Native gate does the heavy lifting: `trust: untrusted` in a server config
+  makes write-capable tools prompt the user at call time (Claude Code's
+  "trust this project's servers?" analog, per-call instead of once).
+- Native default when `trust` is absent is FULL (matches global config
+  semantics; a project file is written by the user, same trust as
+  config.yaml). The SKILL tells the agent to recommend `trust: untrusted`
+  for third-party configs.
 - Per-project approval memory: after a project's config file set changes
   (content hash), the plugin marks the project "unconfirmed". The first
   `project_mcp_sync` after a change returns a `confirmation_required` notice

@@ -159,16 +159,18 @@ def _make_sync(ctx):
 def _make_status(ctx):
     def _status(args: dict, **kwargs) -> str:
         from config_source import load_project_config, resolve_project_root
+        from tools.mcp_tool_config import _load_mcp_config
         project = resolve_project_root(_cwd())
         config = load_project_config(project)
         import syncer
+        global_names = set(_load_mcp_config().keys())
         servers = []
         for name in sorted(config["servers"]):
-            native_conflict = name in syncer.connected_server_names() and name not in (
-                _project_entry(_load_ledger(ctx), project).get("servers") or {})
             info = {"name": name, **syncer.server_status(name)}
-            if native_conflict:
-                info["note"] = "a server with this name is connected from global config"
+            if name in global_names:
+                info["note"] = (
+                    "a server with this name exists in global config; the project copy "
+                    "cannot connect until the name is freed")
             servers.append(info)
         return _result({
             "project": project,
