@@ -1,7 +1,7 @@
 # intent: hermes-project-mcp plugin
 
 Author: Hermes fork session
-Status: in-progress
+Status: done
 Date: 2026-09-07
 
 ## Problem (owner's words)
