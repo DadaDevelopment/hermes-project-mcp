@@ -67,3 +67,14 @@ call proxy.
 - [x] v2 e2e: fresh project proj3, NO manual sync call, agent directly
       called mcp__project-echo__echo -> "echo: v2-native-auto".
       Native-first semantics confirmed live.
+
+## UI layer (2026-09-07, v0.3.0)
+
+- [x] manifest.json written by plugin on every sync (UI-safe summaries)
+- [x] core patch: web_routers/mcp.py appends project servers via
+      hermes_cli/project_mcp_ui_bridge.py (global names win, no-op fallback)
+- [x] dashboard restarted on patched code
+- [x] live verify: GET /api/mcp/servers returns ui-demo-echo with
+      scope=project + project path; total 11 servers (10 global + 1 project)
+- [x] scripts/apply_ui_patch.py (idempotent re-apply after image update)
+      + UI-INTEGRATION.md; pushed
