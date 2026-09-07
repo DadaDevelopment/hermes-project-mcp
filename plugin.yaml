@@ -17,3 +17,6 @@ provides_tools:
   - project_mcp_status
   - project_mcp_add
   - project_mcp_remove
+provides_hooks:
+  - on_session_start
+  - pre_tool_call
