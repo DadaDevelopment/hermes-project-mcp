@@ -110,6 +110,15 @@ def _project_entry(ledger: dict, project: str) -> dict:
     return dict(ledger.get("projects", {}).get(project) or {})
 
 
+def _write_ui_manifest(ctx, ledger: dict) -> None:
+    """Persist the UI manifest into the plugin data dir (best-effort)."""
+    try:
+        from . import ui_manifest
+        ui_manifest.write_manifest(ctx.state.data_dir, ledger)
+    except Exception:
+        logger.warning("project-mcp: UI manifest write failed", exc_info=True)
+
+
 def _put_project_entry(ledger: dict, project: str, entry: dict) -> None:
     ledger.setdefault("projects", {})[project] = entry
 
@@ -147,9 +156,11 @@ def do_sync(ctx, project: Optional[str] = None) -> dict:
         entry["servers"] = new_servers
         entry["hash"] = new_hash
         entry["sig"] = current_sig
+        entry["configs"] = {k: v for k, v in desired.items() if k in new_servers}
         _put_project_entry(ledger, project, entry)
         ledger["active_project"] = project
         _save_ledger(ctx, ledger)
+        _write_ui_manifest(ctx, ledger)
     if not desired:
         return {
             "project": project,

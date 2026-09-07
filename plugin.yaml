@@ -1,5 +1,5 @@
 name: project-mcp
-version: 0.2.0
+version: 0.3.0
 description: >
   Per-project MCP servers (Claude Code style): a project directory defines its
   own MCP servers via .hermes/mcp.json, .mcp.json or .claude/settings*.json.
