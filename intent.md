@@ -57,3 +57,13 @@ call proxy.
 - [ ] v2 unit smoke
 - [ ] v2 push, install update, gateway restart
 - [ ] v2 e2e: fresh project, NO manual sync, direct mcp__ call works
+
+## v2 closure (2026-09-07)
+
+- [x] v2: hooks (on_session_start + pre_tool_call), no call proxy
+- [x] v2 unit smoke: 9/9 scenarios green (test-project-mcp-v2.py)
+- [x] v2 pushed (0.2.0), installed copy = origin/main, doctor clean
+      (4 tools, 2 hooks, no warnings), gateway restarted (PID 129000)
+- [x] v2 e2e: fresh project proj3, NO manual sync call, agent directly
+      called mcp__project-echo__echo -> "echo: v2-native-auto".
+      Native-first semantics confirmed live.
