@@ -74,6 +74,13 @@ def call_tool(server: str, tool: str, arguments: Dict[str, Any], timeout: float 
     return _make_tool_handler(server, tool, timeout)(dict(arguments or {}))
 
 
+def drop_servers(names: Set[str]) -> None:
+    """Disconnect servers this plugin loaded for a previous project (ledger swap)."""
+    for name in names:
+        if name in connected_server_names():
+            _shutdown_server(name)
+
+
 def apply_sync(
     desired: Dict[str, dict],
     ledger_servers: Dict[str, str],

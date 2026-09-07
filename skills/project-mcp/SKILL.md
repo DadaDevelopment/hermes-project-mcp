@@ -11,26 +11,31 @@ project-local MCP setup, or asks what MCP servers a project has.
   `.claude/settings.json` < `.claude/settings.local.json` < `.mcp.json` <
   `.hermes/mcp.json`. All use the `{"mcpServers": {...}}` shape; a bare
   object of servers also works.
-- After creating or editing any of those files, call `project_mcp_sync`.
-  The tools become native tools named `mcp__<server>__<tool>`.
+- Project servers are NATIVE MCP servers: after sync their tools are
+  `mcp__<server>__<tool>` and are called directly, like any global MCP tool.
+  No wrapper, no proxy.
+- Sync happens automatically: once when a session starts in a project with a
+  config, and lazily before the next tool call whenever the config files
+  change (mtime probe) or the session moves to another project. Switching
+  projects disconnects exactly the previous project's servers; global ones
+  stay.
+- `project_mcp_sync` forces a rescan now - use after editing a config file,
+  or when project tools are missing from the tool list mid-turn (the
+  model-facing tool list refreshes next turn; within the same turn use the
+  server via its tool name and it will resolve on the next turn).
 - `project_mcp_status` answers "what MCP servers does this project have".
 - `project_mcp_add` / `project_mcp_remove` edit `.hermes/mcp.json` and sync
   in one step. Prefer them over editing the file by hand when the user asks
   in chat.
-- `project_mcp_call(server, tool, arguments)` is the fallback when the
-  native `mcp__` tool is not in the current tool list (tool list is frozen
-  per turn). Prefer the native tool when present.
-- Project servers default to `trust: untrusted`: write-capable tools ask the
-  user for approval at call time. Do not set `trust: full` without the
-  user asking for it.
+- Project servers default to `trust: full` like global ones (native rule).
+  For third-party configs recommend `"trust": "untrusted"` on the server
+  entry: write-capable tools then require per-call approval.
 - If sync reports `confirmation_required`, tell the user what changed before
   calling project servers.
-- Native default for servers without a `trust` key is FULL (compat). The plugin
-deliberately does not inject `untrusted` automatically, to stay 1:1 with the
-native loader; when the user wants the safe default, add `"trust": "untrusted"`
-to the server entry (write-capable tools then require per-call approval).
 - Servers from the project directory run LOCAL COMMANDS from that directory.
   Never paste server configs from untrusted repos without saying so.
+- A project server whose name equals a global server is skipped (global
+  wins) and noted by project_mcp_status.
 
 ## File format example
 

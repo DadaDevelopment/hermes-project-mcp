@@ -1,8 +1,9 @@
-"""Per-project MCP servers: Claude-Code-style .mcp.json / .hermes/mcp.json support."""
+"""Per-project MCP servers: project files become NATIVE mcp__server__tool tools."""
 
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -10,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 TOOLSET = "project-mcp"
 STATE_KEY = "projects"
+CONNECT_TIMEOUT_S = 8.0
 
 _SCHEMAS: Dict[str, dict] = {}
 
@@ -23,9 +25,11 @@ def _schema(name: str, description: str, properties: dict, required: Optional[li
 
 _schema(
     "project_mcp_sync",
-    "Connect/disconnect the current project's MCP servers (from .hermes/mcp.json, "
-    ".mcp.json, .claude/settings*.json). Run after editing any of those files; also "
-    "run it once when a project's MCP tools are needed.",
+    "Load/refresh the current project's MCP servers (.hermes/mcp.json, .mcp.json, "
+    ".claude/settings*.json). After sync the servers are NATIVE tools named "
+    "mcp__<server>__<tool>; they are callable directly from the next turn "
+    "(the current turn's tool list is frozen). Normally runs automatically on "
+    "session start and on config change; call manually only after editing a config.",
     {},
 )
 _schema(
@@ -35,14 +39,15 @@ _schema(
 )
 _schema(
     "project_mcp_add",
-    "Add an MCP server to the current project's .hermes/mcp.json and sync it.",
+    "Add an MCP server to the current project's .hermes/mcp.json, connect it via "
+    "the native MCP pipeline; its mcp__<name>__* tools are usable next turn.",
     {
-        "name": {"type": "string", "description": "Server name (tool prefix mcp__<name>__)"},
+        "name": {"type": "string", "description": "Server name (tools become mcp__<name>__*)"},
         "command": {"type": "string", "description": "stdio: executable to run"},
         "args": {"type": "array", "items": {"type": "string"}, "description": "stdio: command args"},
         "env": {"type": "object", "additionalProperties": {"type": "string"}, "description": "stdio: extra env"},
         "url": {"type": "string", "description": "http: server URL (skip command)"},
-        "trust": {"type": "string", "enum": ["full", "untrusted"], "description": "default untrusted"},
+        "trust": {"type": "string", "enum": ["full", "untrusted"], "description": "default full (native)"},
         "cwd": {"type": "string", "description": "working dir for the server; ${project} = project root"},
         "lazy": {"type": "boolean", "description": "defer connect to first tool call"},
     },
@@ -53,18 +58,6 @@ _schema(
     "Remove an MCP server from the current project's config and disconnect it.",
     {"name": {"type": "string"}},
     ["name"],
-)
-_schema(
-    "project_mcp_call",
-    "Call a tool on a project MCP server by name (escape hatch when the native "
-    "mcp__<server>__<tool> tool is not loaded in the current tool list).",
-    {
-        "server": {"type": "string"},
-        "tool": {"type": "string"},
-        "arguments": {"type": "object", "additionalProperties": True},
-        "timeout": {"type": "number", "description": "seconds, default 60"},
-    },
-    ["server", "tool"],
 )
 
 
@@ -92,10 +85,18 @@ def _enabled(ctx) -> bool:
 
 
 def _load_ledger(ctx) -> dict:
+    """{"projects": {path: entry}, "active_project": path} - the full state doc."""
     try:
-        return dict(ctx.state.get(STATE_KEY, {}) or {})
+        doc = ctx.state.get(STATE_KEY, {}) or {}
     except Exception:
-        return {}
+        doc = {}
+    if not isinstance(doc, dict):
+        return {"projects": {}, "active_project": ""}
+    if "projects" not in doc:
+        doc = {"projects": doc, "active_project": ""}
+    doc.setdefault("projects", {})
+    doc.setdefault("active_project", "")
+    return doc
 
 
 def _save_ledger(ctx, ledger: dict) -> None:
@@ -106,53 +107,125 @@ def _save_ledger(ctx, ledger: dict) -> None:
 
 
 def _project_entry(ledger: dict, project: str) -> dict:
-    return dict(ledger.get(project) or {})
+    return dict(ledger.get("projects", {}).get(project) or {})
+
+
+def _put_project_entry(ledger: dict, project: str, entry: dict) -> None:
+    ledger.setdefault("projects", {})[project] = entry
+
+
+_SYNC_LOCK = threading.Lock()
+
+
+def do_sync(ctx, project: Optional[str] = None) -> dict:
+    """The real sync. Returns the result payload dict."""
+    from .config_source import load_project_config, resolve_project_root, canonical_hash
+    if project is None:
+        project = resolve_project_root(_cwd())
+    config = load_project_config(project)
+    if config["errors"]:
+        return {
+            "project": project,
+            "status": "config_error",
+            "errors": config["errors"],
+            "hint": "fix the JSON; no servers were changed",
+        }
+    desired = config["servers"]
+    ledger = _load_ledger(ctx)
+    previous_project = str(ledger.get("active_project") or "")
+    entry = _project_entry(ledger, project)
+    old_hash = entry.get("hash")
+    new_hash = canonical_hash(desired) if desired else ""
+    changed = old_hash != new_hash
+    current_sig = _project_signature(project)
+    with _SYNC_LOCK:
+        from . import syncer
+        if previous_project and previous_project != project:
+            prev_entry = _project_entry(ledger, previous_project)
+            syncer.drop_servers(set(prev_entry.get("servers") or {}))
+        new_servers, reports, warnings = syncer.apply_sync(desired, dict(entry.get("servers") or {}))
+        entry["servers"] = new_servers
+        entry["hash"] = new_hash
+        entry["sig"] = current_sig
+        _put_project_entry(ledger, project, entry)
+        ledger["active_project"] = project
+        _save_ledger(ctx, ledger)
+    if not desired:
+        return {
+            "project": project,
+            "status": "empty",
+            "detail": "no project MCP config file found "
+                      "(checked .hermes/mcp.json, .mcp.json, .claude/settings.json, .claude/settings.local.json)",
+        }
+    confirmation_required = old_hash is not None and changed
+    return {
+        "project": project,
+        "status": "synced",
+        "changed": changed,
+        "confirmation_required": confirmation_required,
+        "confirmation_note": (
+            "project MCP config changed since last sync; tell the user what changed and that "
+            "these servers come from the project directory (they run local commands)"
+        ) if confirmation_required else None,
+        "tools_are_native": "servers are now native tools mcp__<server>__<tool>; "
+                            "call them directly (model-facing list refreshes next turn)",
+        "servers": reports,
+        "warnings": warnings,
+    }
+
+
+def _config_paths(project: str):
+    root = Path(project)
+    return (
+        root / ".hermes" / "mcp.json",
+        root / ".mcp.json",
+        root / ".claude" / "settings.json",
+        root / ".claude" / "settings.local.json",
+    )
+
+
+def _project_signature(project: str) -> str:
+    """Cheap change probe: names + mtimes of existing config files."""
+    parts = []
+    for path in _config_paths(project):
+        try:
+            st = path.stat()
+            parts.append(f"{path.name}:{st.st_mtime_ns}:{st.st_size}")
+        except FileNotFoundError:
+            continue
+        except OSError:
+            parts.append(f"{path.name}:err")
+    return "|".join(parts)
+
+
+def _has_project_config(project: str) -> bool:
+    return any(path.exists() for path in _config_paths(project))
+
+
+def _maybe_auto_sync(ctx, reason: str) -> Optional[dict]:
+    """Sync only when needed; never raises; returns the payload when a sync ran."""
+    try:
+        if not _enabled(ctx):
+            return None
+        from .config_source import resolve_project_root
+        project = resolve_project_root(_cwd())
+        if not _has_project_config(project):
+            return None
+        sig = _project_signature(project)
+        ledger = _load_ledger(ctx)
+        entry = _project_entry(ledger, project)
+        active = str(ledger.get("active_project") or "")
+        if entry.get("sig") == sig and active == project and entry.get("servers"):
+            return None
+        return do_sync(ctx, project)
+    except Exception:
+        logger.warning("project-mcp: auto-sync failed", exc_info=True)
+        return None
 
 
 def _make_sync(ctx):
     def _sync(args: dict, **kwargs) -> str:
-        if not _enabled(ctx):
-            return _error("project-mcp plugin is disabled (plugins.entries.project-mcp.settings.enabled)")
-        from .config_source import load_project_config, resolve_project_root, canonical_hash
-        project = resolve_project_root(_cwd())
-        config = load_project_config(project)
-        if config["errors"]:
-            return _result({
-                "project": project,
-                "status": "config_error",
-                "errors": config["errors"],
-                "hint": "fix the JSON and call project_mcp_sync again; no servers were changed",
-            })
-        desired = config["servers"]
-        if not desired:
-            return _result({
-                "project": project,
-                "status": "empty",
-                "detail": "no project MCP config file found "
-                          "(checked .hermes/mcp.json, .mcp.json, .claude/settings.json, .claude/settings.local.json)",
-            })
-        ledger = _load_ledger(ctx)
-        entry = _project_entry(ledger, project)
-        old_hash = entry.get("hash")
-        new_hash = canonical_hash(desired)
-        from . import syncer
-        new_servers, reports, warnings = syncer.apply_sync(desired, dict(entry.get("servers") or {}))
-        entry["servers"] = new_servers
-        entry["hash"] = new_hash
-        ledger[project] = entry
-        _save_ledger(ctx, ledger)
-        confirmation_required = old_hash is not None and old_hash != new_hash
-        return _result({
-            "project": project,
-            "status": "synced",
-            "confirmation_required": confirmation_required,
-            "confirmation_note": (
-                "project MCP config changed since last sync; tell the user what changed and that "
-                "these servers come from the project directory (they run local commands)"
-            ) if confirmation_required else None,
-            "servers": reports,
-            "warnings": warnings,
-        })
+        return _result(do_sync(ctx))
     return _sync
 
 
@@ -202,6 +275,20 @@ def _entry_to_config(name: str, args: dict) -> dict:
     return cfg
 
 
+def _write_project_config(project: str, name: str, cfg: dict) -> Path:
+    target = Path(project) / ".hermes" / "mcp.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    data: Dict[str, Any] = {}
+    if target.exists():
+        data = json.loads(target.read_text(encoding="utf-8"))
+    servers = data.get("mcpServers") if isinstance(data, dict) and isinstance(data.get("mcpServers"), dict) else {}
+    if not servers and isinstance(data, dict) and data:
+        servers = data
+    servers[name] = cfg
+    target.write_text(json.dumps({"mcpServers": servers}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return target
+
+
 def _make_add(ctx):
     def _add(args: dict, **kwargs) -> str:
         name = str(args.get("name") or "").strip()
@@ -215,21 +302,15 @@ def _make_add(ctx):
         project = resolve_project_root(_cwd())
         target = Path(project) / ".hermes" / "mcp.json"
         try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            data: Dict[str, Any] = {}
-            if target.exists():
-                data = json.loads(target.read_text(encoding="utf-8"))
-            servers = data.get("mcpServers") if isinstance(data, dict) and isinstance(data.get("mcpServers"), dict) else {}
-            if not servers and isinstance(data, dict) and data:
-                servers = data
-            servers[name] = cfg
-            data = {"mcpServers": servers}
-            target.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            target = _write_project_config(project, name, cfg)
         except (OSError, ValueError) as exc:
             return _error(f"failed to write {target}: {exc}")
-        sync = _make_sync(ctx)
-        sync_result = json.loads(sync({}, **kwargs))
-        return _result({"written": str(target), "config": cfg, "sync": sync_result})
+        payload = do_sync(ctx, project)
+        payload["written"] = str(target)
+        payload["next_turn_note"] = (
+            f"server '{name}' is syncing now; its native tools mcp__{name}__* appear in the "
+            "model-facing tool list on the NEXT turn")
+        return _result(payload)
     return _add
 
 
@@ -241,11 +322,7 @@ def _make_remove(ctx):
         from .config_source import resolve_project_root
         project = resolve_project_root(_cwd())
         removed_from = []
-        candidates = [
-            Path(project) / ".hermes" / "mcp.json",
-            Path(project) / ".mcp.json",
-        ]
-        for target in candidates:
+        for target in (Path(project) / ".hermes" / "mcp.json", Path(project) / ".mcp.json"):
             if not target.exists():
                 continue
             try:
@@ -262,49 +339,40 @@ def _make_remove(ctx):
                     removed_from.append(str(target))
                 except OSError as exc:
                     return _error(f"failed to write {target}: {exc}")
-        sync = _make_sync(ctx)
-        sync_result = json.loads(sync({}, **kwargs))
-        return _result({"removed_from": removed_from, "sync": sync_result})
+        payload = do_sync(ctx, project)
+        payload["removed_from"] = removed_from
+        return _result(payload)
     return _remove
 
 
-def _make_call(ctx):
-    def _call(args: dict, **kwargs) -> str:
-        server = str(args.get("server") or "").strip()
-        tool = str(args.get("tool") or "").strip()
-        if not server or not tool:
-            return _error("server and tool are required")
-        from .config_source import load_project_config, resolve_project_root
-        project = resolve_project_root(_cwd())
-        config = load_project_config(project)
-        if server not in config["servers"]:
-            known = sorted(config["servers"])
-            return _error(f"server '{server}' is not defined in this project's MCP config", known=known)
-        from . import syncer
-        status = syncer.server_status(server)
-        if status["status"] not in ("connected", "lazy"):
-            sync = _make_sync(ctx)
-            sync({}, **kwargs)
-            status = syncer.server_status(server)
-        if status["status"] not in ("connected", "lazy"):
-            return _error(f"server '{server}' is not connected", status=status)
-        timeout = args.get("timeout")
-        try:
-            timeout_f = min(max(float(timeout), 1.0), 600.0) if timeout else 60.0
-        except (TypeError, ValueError):
-            timeout_f = 60.0
-        raw = syncer.call_tool(server, tool, args.get("arguments") or {}, timeout_f)
-        return raw if isinstance(raw, str) else _result({"result": raw})
-    return _call
+def _make_session_start_hook(ctx):
+    def _hook(**hook_kwargs):
+        _maybe_auto_sync(ctx, "session_start")
+        return None
+    return _hook
+
+
+def _make_pre_tool_call_hook(ctx):
+    def _hook(**hook_kwargs):
+        _maybe_auto_sync(ctx, "pre_tool_call")
+        return None
+    return _hook
 
 
 def register(ctx) -> None:
+    for hook_name, factory in (
+        ("on_session_start", _make_session_start_hook),
+        ("pre_tool_call", _make_pre_tool_call_hook),
+    ):
+        try:
+            ctx.register_hook(hook_name, factory(ctx))
+        except Exception:
+            logger.warning("project-mcp: failed to register %s hook", hook_name, exc_info=True)
     handlers = {
         "project_mcp_sync": _make_sync(ctx),
         "project_mcp_status": _make_status(ctx),
         "project_mcp_add": _make_add(ctx),
         "project_mcp_remove": _make_remove(ctx),
-        "project_mcp_call": _make_call(ctx),
     }
     for name, handler in handlers.items():
         try:

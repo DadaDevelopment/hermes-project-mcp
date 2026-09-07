@@ -66,19 +66,30 @@ expanded to the project root before interpolation. Relative `cwd` values are
 resolved against the project root. This lets a repo ship e.g.
 `cwd: "${project}/server"`.
 
-## Tools (toolset `project-mcp`)
+## Tools (v2: native-first, no call proxy)
 
 - `project_mcp_sync()` - rescan current project, connect new/changed servers
   (register_mcp_servers), disconnect removed/stale ones (shutdown), return
-  per-server status. Idempotent; safe to call any time.
+  per-server status. Idempotent; safe to call any time. ALSO auto-invoked:
+  (a) once on session start when the project has a config,
+  (b) lazily from a `pre_tool_call` hook when a tool is about to run and the
+  project config changed since the last sync (stat-mtime guard, then cheap
+  hash; connect only on real change). The model-facing tools after sync are
+  the native `mcp__<server>__<tool>` - the agent calls them directly.
 - `project_mcp_status()` - report project root, config files found, per-server
   state (connected/failed/disabled), conflict notes. Read-only.
 - `project_mcp_add(name, command|url, args?, env?, trust?, cwd?)` - write an
-  entry into `<project>/.hermes/mcp.json` (creating dirs), then sync.
+  entry into `<project>/.hermes/mcp.json` (creating dirs), then sync; the new
+  native tools are usable from the NEXT turn (current turn's tool list is
+  frozen - say so in the result).
 - `project_mcp_remove(name)` - delete entry from project config, then sync.
-- `project_mcp_call(server, tool, arguments)` - escape hatch when the native
-  mcp__ tool of the same name is not visible (e.g. model did not reload
-  schemas); routes through the same handler pipeline as native calls.
+
+## Scoping (per-project or global, never both for one name)
+
+- Servers loaded from the project live in the same native namespace as
+  global ones. On project switch, the plugin disconnects exactly the servers
+  it loaded for the previous project (its own ledger), never global servers.
+- Global config always wins a name collision (native rule, kept).
 
 ## Trust model (Claude Code parity)
 

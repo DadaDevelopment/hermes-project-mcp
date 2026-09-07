@@ -6,81 +6,54 @@ Date: 2026-09-07
 
 ## Problem (owner's words)
 
-"сделать per-project mcp как в claude code; настройка через desktop/ui/конфиг/+
-аналог /path/to/project/.claude папочки"
+"сделать per-project mcp как в claude code; настройка через desktop/ui/конфиг/
++ аналог /path/to/project/.claude папочки"
 
 Hermes has global MCP config only. Claude Code has project-scoped MCP: a
 .mcp.json / .claude folder in the project root defines servers that apply when
-working in that project. Hermes sessions work on projects (cwd) but cannot get
-project-specific MCP servers.
+working in that project.
 
-## Proposed outcome
+## INCIDENT (owner correction, 2026-09-07)
 
-A native Hermes plugin (DadaDevelopment/hermes-project-mcp) that gives every
-Hermes session per-project MCP servers:
+v1 shipped project_mcp_call as the call path and manual project_mcp_sync as
+the load path. Owner: "нет, так не пойдет - просто добавить mcp с названием
+project mcp; нужно чтобы сама сущность сконфигурированного mcp жила либо
+per-project либо глобально и агент честно видел все видные в его скоупе mcp
+и мог честно их вызвать, а не этот костыль".
 
-- Project config file: `<project>/.hermes/mcp.json` (native format) AND reads
-  Claude Code's own `.mcp.json` / `.claude/settings.json` (mcpServers key) for
-  compat - projects already configured for Claude Code work with zero edits.
-- Stable tool surface (gateway/proxy pattern): `project_mcp_list`,
-  `project_mcp_tools`, `project_mcp_call`, `project_mcp_add`,
-  `project_mcp_remove` - the agent manages servers through chat.
-- Server connections are spawned on demand (stdio/http), cached per session.
-- Trust gating: servers from a project file are not callable until approved
-  (approval keyed by project path + config hash), mirroring Claude Code's
-  "trust this project's .mcp.json?" prompt. Approval via explicit tool call.
-- Global config surface: allowlist/denylist + defaults in config.yaml
-  (plugins.entries.project-mcp.settings.*).
+Verdict: the WRAPPER is the crutch. Project servers must be NATIVE servers:
+tools appear as mcp__<server>__<tool> in the model-facing tool list and are
+called directly. The plugin is a loader + scoper + config manager, never a
+call proxy.
 
-## Affected systems
+## Proposed outcome (v2)
 
-- New repo DadaDevelopment/hermes-project-mcp (push approved pattern from
-  share-artifact precedent: "выложим на gh DadaDevelopment").
-- This Hermes instance: install + enable plugin, gateway restart (established
-  pattern, done twice before).
-- No new public endpoints. No runtime external pushes. Server processes are
-  spawned locally per project config.
+- `<project>/.hermes/mcp.json` (+ Claude compat files) loaded automatically:
+  on session start and lazily before tool calls (cheap stat check; full sync
+  only when the project config actually changed or the project switched).
+- Sync feeds servers into the NATIVE pipeline (register_mcp_servers); tools
+  become native tools; trust/breaker/keepalive all native.
+- Scoping: the current project's servers replace the previous project's
+  (ledger swap per profile). Global config servers always stay.
+- Management surface (chat = the desktop surface): project_mcp_add/remove/
+  status/sync. add/remove write .hermes/mcp.json and auto-sync.
+- project_mcp_call: REMOVED in v2.
 
 ## Constraints
 
-- Handlers must discover the session's project root (cwd chain) at call time.
-- No gateway restart needed to change a project's servers (that is the point).
-- Plain ASCII. No comments in source. Docstrings allowed.
-
-## Open questions
-
-- Desktop UI panel: v2. v1 = chat-driven management via tools + project file +
-  global config. Owner listed "desktop/ui" as a config surface; tools driven
-  from the chat ARE the desktop surface today (agent edits config on request).
+- No gateway restart to change a project's servers.
+- Session-start sync is synchronous but only when a project config exists and
+  changed (zero cost otherwise); per-server connect capped at 8s.
+- Plain ASCII. No comments in source.
 
 ## Progress checklist
 
 - [x] intent written
-- [ ] audit live /opt/hermes: MCP config shape, handler kwargs/session cwd,
-      call_mcp internals, desktop plugin API
-- [ ] spec: config file formats + tool schemas + trust model
-- [ ] plan: modules, failure modes
-- [x] build + local tests (offline loader-repro: register OK, handler call OK
-      after relative-import fix; before fix the exact ModuleNotFoundError
-      'config_source' reproduced)
-- [x] push (79eeb7b, main) + installed copy /opt/data/plugins/project-mcp synced
-- [x] live dogfood e2e (2026-09-07, proj2): project_mcp_add wrote
-      .hermes/mcp.json, sync connected echo2 with 2 tools, project_mcp_call
-      echo round-trip returned "echo: ping-from-e2e"
-- [ ] hermes plugins doctor + gateway restart: pending. NOTE: the gateway
-      process still holds pre-fix plugin code in memory; fresh CLI processes
-      (hermes -z) get the fix immediately, gateway-served sessions keep hitting
-      ModuleNotFoundError until the gateway restarts.
-
-## Incident (2026-09-07, found via live e2e attempt)
-
-All five project_mcp_* tools were dead on call: handlers used absolute sibling
-imports (`from config_source import ...`, `import syncer`) inside function
-bodies, but plugins_loader imports directory plugins as `hermes_plugins.<slug>`
-with explicit __path__ and never puts the plugin dir on sys.path. Tool
-registration succeeded, so the plugin looked healthy until the first call.
-Fix: relative imports (`from .config_source import ...`, `from . import
-syncer`) in __init__.py and syncer.py, commit 79eeb7b. Lesson: a plugin that
-only registers is not a plugin that works - the loader-repro (import via
-hermes_plugins package path, then CALL a handler) belongs in the build stage,
-not after install.
+- [x] audit live /opt/hermes
+- [x] spec v1 -> INCIDENT -> v2
+- [x] plan
+- [x] v1 build + e2e (wrapper path - rejected by owner)
+- [ ] v2: hooks (on_session_start + pre_tool_call), drop wrapper
+- [ ] v2 unit smoke
+- [ ] v2 push, install update, gateway restart
+- [ ] v2 e2e: fresh project, NO manual sync, direct mcp__ call works
