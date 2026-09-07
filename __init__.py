@@ -113,7 +113,7 @@ def _make_sync(ctx):
     def _sync(args: dict, **kwargs) -> str:
         if not _enabled(ctx):
             return _error("project-mcp plugin is disabled (plugins.entries.project-mcp.settings.enabled)")
-        from config_source import load_project_config, resolve_project_root, canonical_hash
+        from .config_source import load_project_config, resolve_project_root, canonical_hash
         project = resolve_project_root(_cwd())
         config = load_project_config(project)
         if config["errors"]:
@@ -135,7 +135,7 @@ def _make_sync(ctx):
         entry = _project_entry(ledger, project)
         old_hash = entry.get("hash")
         new_hash = canonical_hash(desired)
-        import syncer
+        from . import syncer
         new_servers, reports, warnings = syncer.apply_sync(desired, dict(entry.get("servers") or {}))
         entry["servers"] = new_servers
         entry["hash"] = new_hash
@@ -158,11 +158,11 @@ def _make_sync(ctx):
 
 def _make_status(ctx):
     def _status(args: dict, **kwargs) -> str:
-        from config_source import load_project_config, resolve_project_root
+        from .config_source import load_project_config, resolve_project_root
         from tools.mcp_tool_config import _load_mcp_config
         project = resolve_project_root(_cwd())
         config = load_project_config(project)
-        import syncer
+        from . import syncer
         global_names = set(_load_mcp_config().keys())
         servers = []
         for name in sorted(config["servers"]):
@@ -211,7 +211,7 @@ def _make_add(ctx):
             cfg = _entry_to_config(name, args)
         except ValueError as exc:
             return _error(str(exc))
-        from config_source import resolve_project_root
+        from .config_source import resolve_project_root
         project = resolve_project_root(_cwd())
         target = Path(project) / ".hermes" / "mcp.json"
         try:
@@ -238,7 +238,7 @@ def _make_remove(ctx):
         name = str(args.get("name") or "").strip()
         if not name:
             return _error("name is required")
-        from config_source import resolve_project_root
+        from .config_source import resolve_project_root
         project = resolve_project_root(_cwd())
         removed_from = []
         candidates = [
@@ -274,13 +274,13 @@ def _make_call(ctx):
         tool = str(args.get("tool") or "").strip()
         if not server or not tool:
             return _error("server and tool are required")
-        from config_source import load_project_config, resolve_project_root
+        from .config_source import load_project_config, resolve_project_root
         project = resolve_project_root(_cwd())
         config = load_project_config(project)
         if server not in config["servers"]:
             known = sorted(config["servers"])
             return _error(f"server '{server}' is not defined in this project's MCP config", known=known)
-        import syncer
+        from . import syncer
         status = syncer.server_status(server)
         if status["status"] not in ("connected", "lazy"):
             sync = _make_sync(ctx)

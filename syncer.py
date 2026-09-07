@@ -84,7 +84,7 @@ def apply_sync(
     """
     from tools.mcp_tool_discovery import register_mcp_servers
     from hermes_cli.mcp_security import validate_mcp_server_entry
-    from config_source import canonical_hash
+    from .config_source import canonical_hash
 
     warnings: List[str] = []
     reports: List[dict] = []
