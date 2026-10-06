@@ -36,6 +36,12 @@ project-local MCP setup, or asks what MCP servers a project has.
   Never paste server configs from untrusted repos without saying so.
 - A project server whose name equals a global server is skipped (global
   wins) and noted by project_mcp_status.
+- `"disabledServers": ["name", ...]` in `.hermes/mcp.json` switches GLOBAL
+  servers off for this project (and every subdirectory/submodule): any
+  `mcp__<name>__*` call made with cwd inside the project is vetoed in
+  pre_tool_call with a message naming the file. Other projects keep the
+  server. The catalog still lists the tools - the veto is at call time.
+  `project_mcp_status` shows the list as `disabled_global_servers`.
 - Synced project servers are mirrored into config.yaml (marked with
   `_project_mcp`) so the dashboard/CLI show them as first-class servers.
   The active project's servers are enabled; other projects' show as
@@ -50,7 +56,8 @@ project-local MCP setup, or asks what MCP servers a project has.
     "fetch": {"command": "uvx", "args": ["mcp-server-fetch"]},
     "api": {"url": "http://127.0.0.1:8080/mcp"},
     "builder": {"command": "node", "args": ["server.js"], "cwd": "${project}/tools"}
-  }
+  },
+  "disabledServers": ["dada-cloud"]
 }
 ```
 

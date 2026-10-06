@@ -241,7 +241,7 @@ def _make_sync(ctx):
 
 def _make_status(ctx):
     def _status(args: dict, **kwargs) -> str:
-        from .config_source import load_project_config, resolve_project_root
+        from .config_source import load_disabled_servers, load_project_config, resolve_project_root
         from tools.mcp_tool_config import _load_mcp_config
         project = resolve_project_root(_cwd())
         config = load_project_config(project)
@@ -260,6 +260,7 @@ def _make_status(ctx):
             "sources": config["sources"],
             "errors": config["errors"],
             "servers": servers,
+            "disabled_global_servers": load_disabled_servers(project),
         })
     return _status
 
@@ -365,8 +366,39 @@ def _make_session_start_hook(ctx):
 def _make_pre_tool_call_hook(ctx):
     def _hook(**hook_kwargs):
         _maybe_auto_sync(ctx, "pre_tool_call")
-        return None
+        return _disabled_server_block(ctx, str(hook_kwargs.get("tool_name") or ""))
     return _hook
+
+
+def _server_prefix(name: str) -> str:
+    """Native tool-name prefix of MCP server *name* (``mcp__<sanitized>__``)."""
+    try:
+        from tools.mcp_tool_schema import sanitize_mcp_name_component
+        return f"mcp__{sanitize_mcp_name_component(name)}__"
+    except Exception:
+        import re
+        return f"mcp__{re.sub(r'[^A-Za-z0-9_]', '_', name)}__"
+
+
+def _disabled_server_block(ctx, tool_name: str) -> Optional[dict]:
+    """Veto a call to a global MCP server that the current project lists in ``disabledServers``.
+
+    Global servers live in one shared process, so a project cannot disconnect them without
+    taking them from every other session; the per-project switch is a call-time veto instead.
+    """
+    if not tool_name.startswith("mcp__") or not _enabled(ctx):
+        return None
+    try:
+        from .config_source import load_disabled_servers
+        project = _cwd()
+        for name in load_disabled_servers(project):
+            if tool_name.startswith(_server_prefix(name)):
+                return {"action": "block", "message": (
+                    f"MCP server '{name}' is disabled for project {project} "
+                    f"(.hermes/mcp.json disabledServers). Use the project's own server instead.")}
+    except Exception:
+        logger.warning("project-mcp: disabled-server check failed", exc_info=True)
+    return None
 
 
 def register(ctx) -> None:

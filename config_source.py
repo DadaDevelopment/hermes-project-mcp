@@ -11,6 +11,7 @@ CONFIG_FILENAME = "mcp.json"
 CLAUDE_DIRNAME = ".claude"
 CLAUDE_FILES = ("settings.json", "settings.local.json")
 CLAUDE_ROOT_FILE = ".mcp.json"
+DISABLED_KEY = "disabledServers"
 
 MAX_FILE_BYTES = 256 * 1024
 
@@ -48,9 +49,28 @@ def _extract_servers(data: Any, source: str, errors: List[str]) -> Dict[str, dic
     if isinstance(data, dict) and "servers" in data:
         return {}
     if isinstance(data, dict):
-        return {str(k): v for k, v in data.items()}
+        return {str(k): v for k, v in data.items() if k != DISABLED_KEY}
     errors.append(f"{source}: no mcpServers object found")
     return {}
+
+
+def load_disabled_servers(project: str) -> List[str]:
+    """Global server names switched off for *project*, from ``disabledServers`` in ``.hermes/mcp.json``.
+
+    Every ancestor directory's ``.hermes/mcp.json`` counts, so a git submodule or nested repo
+    inside a project inherits the parent's switch-offs. Only the Hermes-owned file is read:
+    ``.mcp.json`` and ``.claude/*`` belong to Claude Code and have no such key.
+    """
+    names: set = set()
+    start = Path(project).expanduser()
+    for candidate in (start, *start.parents):
+        data, err = _read_json(candidate / CONFIG_DIRNAME / CONFIG_FILENAME)
+        if err is not None or not isinstance(data, dict):
+            continue
+        listed = data.get(DISABLED_KEY)
+        if isinstance(listed, list):
+            names.update(str(n).strip() for n in listed if isinstance(n, str) and str(n).strip())
+    return sorted(names)
 
 
 def _sources_for(project: str) -> List[Tuple[str, Path]]:
