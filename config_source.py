@@ -48,6 +48,8 @@ def _extract_servers(data: Any, source: str, errors: List[str]) -> Dict[str, dic
         return {str(k): v for k, v in data["mcpServers"].items()}
     if isinstance(data, dict) and "servers" in data:
         return {}
+    if source.startswith(f"{CLAUDE_DIRNAME}/"):
+        return {}
     if isinstance(data, dict):
         return {str(k): v for k, v in data.items() if k != DISABLED_KEY}
     errors.append(f"{source}: no mcpServers object found")

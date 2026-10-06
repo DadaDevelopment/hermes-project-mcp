@@ -83,3 +83,10 @@ def test_disabled_key_is_not_a_server_in_flat_layout(source, project):
     _write(project, {"jenkins-ses": {"url": "http://x"}, "disabledServers": ["jenkins"]})
     assert sorted(source.load_project_config(str(project))["servers"]) == ["jenkins-ses"]
     assert source.load_disabled_servers(str(project)) == ["jenkins"]
+
+
+def test_claude_settings_keys_are_not_servers(source, project):
+    (project / ".claude").mkdir()
+    (project / ".claude" / "settings.json").write_text(
+        json.dumps({"$comment": "x", "hooks": {}, "permissions": {"allow": []}}), encoding="utf-8")
+    assert sorted(source.load_project_config(str(project))["servers"]) == ["jenkins-ses"]
